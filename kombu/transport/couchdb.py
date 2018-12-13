@@ -4,7 +4,7 @@ kombu.transport.couchdb
 
 CouchDB transport.
 
-:copyright: (c) 2010 - 2012 by David Clymer.
+:copyright: (c) 2010 - 2013 by David Clymer.
 :license: BSD, see LICENSE for more details.
 
 """
@@ -15,9 +15,9 @@ import couchdb
 
 from anyjson import loads, dumps
 
-from kombu.exceptions import StdConnectionError, StdChannelError
 from kombu.five import Empty
 from kombu.utils import uuid4
+from kombu.utils.encoding import bytes_to_str
 
 from . import virtual
 
@@ -57,7 +57,7 @@ class Channel(virtual.Channel):
 
         item = result.rows[0].value
         self.client.delete(item)
-        return loads(item['payload'])
+        return loads(bytes_to_str(item['payload']))
 
     def _purge(self, queue):
         result = self._query(queue)
@@ -107,17 +107,21 @@ class Transport(virtual.Transport):
 
     polling_interval = 1
     default_port = DEFAULT_PORT
-    connection_errors = (StdConnectionError,
-                         socket.error,
-                         couchdb.HTTPError,
-                         couchdb.ServerError,
-                         couchdb.Unauthorized)
-    channel_errors = (StdChannelError,
-                      couchdb.HTTPError,
-                      couchdb.ServerError,
-                      couchdb.PreconditionFailed,
-                      couchdb.ResourceConflict,
-                      couchdb.ResourceNotFound)
+    connection_errors = (
+        virtual.Transport.connection_errors + (
+            socket.error,
+            couchdb.HTTPError,
+            couchdb.ServerError,
+            couchdb.Unauthorized)
+    )
+    channel_errors = (
+        virtual.Transport.channel_errors + (
+            couchdb.HTTPError,
+            couchdb.ServerError,
+            couchdb.PreconditionFailed,
+            couchdb.ResourceConflict,
+            couchdb.ResourceNotFound)
+    )
     driver_type = 'couchdb'
     driver_name = 'couchdb'
 

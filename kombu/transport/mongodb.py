@@ -4,7 +4,7 @@ kombu.transport.mongodb
 
 MongoDB transport.
 
-:copyright: (c) 2010 - 2012 by Flavio Percoco Premoli.
+:copyright: (c) 2010 - 2013 by Flavio Percoco Premoli.
 :license: BSD, see LICENSE for more details.
 
 """
@@ -14,10 +14,11 @@ import pymongo
 
 from pymongo import errors
 from anyjson import loads, dumps
-from pymongo.connection import Connection
+from pymongo import MongoClient
 
-from kombu.exceptions import StdConnectionError, StdChannelError
 from kombu.five import Empty
+from kombu.syn import _detect_environment
+from kombu.utils.encoding import bytes_to_str
 
 from . import virtual
 
@@ -50,7 +51,7 @@ class Channel(virtual.Channel):
             if queue in self._fanout_queues:
                 msg = next(self._queue_cursors[queue])
                 self._queue_readcounts[queue] += 1
-                return loads(msg['payload'])
+                return loads(bytes_to_str(msg['payload']))
             else:
                 msg = self.client.command(
                     'findandmodify', 'messages',
@@ -67,7 +68,7 @@ class Channel(virtual.Channel):
         # as of mongo 2.0 empty results won't raise an error
         if msg['value'] is None:
             raise Empty()
-        return loads(msg['value']['payload'])
+        return loads(bytes_to_str(msg['value']['payload']))
 
     def _size(self, queue):
         if queue in self._fanout_queues:
@@ -90,37 +91,42 @@ class Channel(virtual.Channel):
             self.client.messages.remove({'queue': queue})
         return size
 
-    def close(self):
-        super(Channel, self).close()
-        if self._client:
-            self._client.connection.end_request()
-
-    def _open(self):
-        """
-        See mongodb uri documentation:
-        http://www.mongodb.org/display/DOCS/Connections
-        """
+    def _open(self, scheme='mongodb://'):
+        # See mongodb uri documentation:
+        # http://www.mongodb.org/display/DOCS/Connections
         client = self.connection.client
+        options = client.transport_options
         hostname = client.hostname or DEFAULT_HOST
         authdb = dbname = client.virtual_host
 
-        if dbname in ["/", None]:
+        if dbname in ['/', None]:
             dbname = "kombu_default"
             authdb = "admin"
+        if not hostname.startswith(scheme):
 
-        if not client.userid:
-            hostname = hostname.replace('/' + client.virtual_host, '/')
-        else:
-            hostname = hostname.replace('/' + client.virtual_host,
-                                        '/' + authdb)
+            hostname = scheme + hostname
 
-        mongo_uri = 'mongodb://' + hostname
+        if not hostname[len(scheme):]:
+            hostname += 'localhost'
+
+        # XXX What does this do?  [ask]
+        urest = hostname[len(scheme):]
+        if '/' in urest:
+            if not client.userid:
+                urest = urest.replace('/' + client.virtual_host, '/')
+                hostname = ''.join([scheme, urest])
+
         # At this point we expect the hostname to be something like
         # (considering replica set form too):
         #
         #   mongodb://[username:password@]host1[:port1][,host2[:port2],
         #   ...[,hostN[:portN]]][/[?options]]
-        mongoconn = Connection(host=mongo_uri, ssl=client.ssl)
+        options.setdefault('auto_start_request', True)
+        mongoconn = MongoClient(
+            host=hostname, ssl=client.ssl,
+            auto_start_request=options['auto_start_request'],
+            use_greenlets=_detect_environment() != 'default',
+        )
         database = getattr(mongoconn, dbname)
 
         version = mongoconn.server_info()['version']
@@ -134,8 +140,7 @@ class Channel(virtual.Channel):
         col.ensure_index([('queue', 1), ('_id', 1)], background=True)
 
         if 'messages.broadcast' not in database.collection_names():
-            capsize = (client.transport_options.get('capped_queue_size')
-                       or 100000)
+            capsize = options.get('capped_queue_size') or 100000
             database.create_collection('messages.broadcast',
                                        size=capsize, capped=True)
 
@@ -196,12 +201,17 @@ class Channel(virtual.Channel):
 class Transport(virtual.Transport):
     Channel = Channel
 
+    can_parse_url = True
     polling_interval = 1
     default_port = DEFAULT_PORT
-    connection_errors = (StdConnectionError, errors.ConnectionFailure)
-    channel_errors = (StdChannelError,
-                      errors.ConnectionFailure,
-                      errors.OperationFailure)
+    connection_errors = (
+        virtual.Transport.connection_errors + (errors.ConnectionFailure, )
+    )
+    channel_errors = (
+        virtual.Transport.channel_errors + (
+            errors.ConnectionFailure,
+            errors.OperationFailure)
+    )
     driver_type = 'mongodb'
     driver_name = 'pymongo'
 

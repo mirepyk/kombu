@@ -23,7 +23,6 @@ from amqplib.client_0_8.channel import Channel as _Channel
 from amqplib.client_0_8.exceptions import AMQPConnectionException
 from amqplib.client_0_8.exceptions import AMQPChannelException
 
-from kombu.exceptions import StdConnectionError, StdChannelError
 from kombu.five import items
 from kombu.utils.encoding import str_to_bytes
 from kombu.utils.amq_manager import get_manager
@@ -305,22 +304,20 @@ class Transport(base.Transport):
 
     # it's very annoying that amqplib sometimes raises AttributeError
     # if the connection is lost, but nothing we can do about that here.
-    connection_errors = (StdConnectionError,
-                         AMQPConnectionException,
-                         socket.error,
-                         IOError,
-                         OSError,
-                         AttributeError)
-    channel_errors = (StdChannelError, AMQPChannelException, )
+    connection_errors = (
+        base.Transport.connection_errors + (
+            AMQPConnectionException,
+            socket.error, IOError, OSError, AttributeError)
+    )
+    channel_errors = base.Transport.channel_errors + (AMQPChannelException, )
 
-    nb_keep_draining = True
-    driver_name = "amqplib"
-    driver_type = "amqp"
+    driver_name = 'amqplib'
+    driver_type = 'amqp'
     supports_ev = True
 
     def __init__(self, client, **kwargs):
         self.client = client
-        self.default_port = kwargs.get("default_port") or self.default_port
+        self.default_port = kwargs.get('default_port') or self.default_port
 
     def create_channel(self, connection):
         return connection.channel()
@@ -370,14 +367,9 @@ class Transport(base.Transport):
     def verify_connection(self, connection):
         return connection.channels is not None and self.is_alive(connection)
 
-    def eventmap(self, connection):
-        return {connection.method_reader.source.sock: self.client.drain_nowait}
-
-    def on_poll_init(self, poller):
-        pass
-
-    def on_poll_start(self):
-        return {}
+    def register_with_event_loop(self, connection, loop):
+        loop.add_reader(connection.method_reader.source.sock,
+                        self.on_readable, connection, loop)
 
     @property
     def default_connection_params(self):

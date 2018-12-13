@@ -21,10 +21,9 @@ from boto.sdb.connection import SDBConnection
 from boto.sqs.connection import SQSConnection
 from boto.sqs.message import Message
 
-from kombu.exceptions import StdConnectionError, StdChannelError
 from kombu.five import Empty, range, text_t
 from kombu.utils import cached_property, uuid
-from kombu.utils.encoding import safe_str
+from kombu.utils.encoding import bytes_to_str, safe_str
 
 from . import virtual
 
@@ -131,8 +130,7 @@ class Channel(virtual.Channel):
 
     default_region = 'us-east-1'
     default_visibility_timeout = 1800  # 30 minutes.
-    # 20 seconds is the max value currently supported by SQS.
-    default_wait_time_seconds = 1  # disabled: see Issue #198
+    default_wait_time_seconds = 0  # disabled see #198
     domain_format = 'kombu%(vhost)s'
     _sdb = None
     _sqs = None
@@ -149,6 +147,7 @@ class Channel(virtual.Channel):
         queues = self.sqs.get_all_queues(prefix=self.queue_name_prefix)
         for queue in queues:
             self._queue_cache[queue.name] = queue
+        self._fanout_queues = set()
 
     def basic_consume(self, queue, no_ack, *args, **kwargs):
         if no_ack:
@@ -178,6 +177,13 @@ class Channel(virtual.Channel):
                 queue, self.visibility_timeout,
             )
             return q
+
+    def queue_bind(self, queue, exchange=None, routing_key='',
+                   arguments=None, **kwargs):
+        super(Channel, self).queue_bind(queue, exchange, routing_key,
+                                        arguments, **kwargs)
+        if self.typeof(exchange).type == 'fanout':
+            self._fanout_queues.add(queue)
 
     def _queue_bind(self, *args):
         """Bind ``queue`` to ``exchange`` with routing key.
@@ -218,7 +224,7 @@ class Channel(virtual.Channel):
         super(Channel, self).exchange_delete(exchange, **kwargs)
 
     def _has_queue(self, queue, **kwargs):
-        """Returns True if ``queue`` has been previously declared."""
+        """Return True if ``queue`` was previously declared."""
         if self.supports_fanout:
             return bool(self.table.get_queue(queue))
         return super(Channel, self)._has_queue(queue)
@@ -238,13 +244,13 @@ class Channel(virtual.Channel):
     def _get(self, queue):
         """Try to retrieve a single message off ``queue``."""
         q = self._new_queue(queue)
-        if W_LONG_POLLING:
+        if W_LONG_POLLING and queue not in self._fanout_queues:
             rs = q.get_messages(1, wait_time_seconds=self.wait_time_seconds)
         else:  # boto < 2.8
             rs = q.get_messages(1)
         if rs:
             m = rs[0]
-            payload = loads(rs[0].get_body())
+            payload = loads(bytes_to_str(rs[0].get_body()))
             if queue in self._noack_queues:
                 q.delete_message(m)
             else:
@@ -271,11 +277,11 @@ class Channel(virtual.Channel):
         super(Channel, self).basic_ack(delivery_tag)
 
     def _size(self, queue):
-        """Returns the number of messages in a queue."""
+        """Return the number of messages in a queue."""
         return self._new_queue(queue).count()
 
     def _purge(self, queue):
-        """Deletes all current messages in a queue."""
+        """Delete all current messages in a queue."""
         q = self._new_queue(queue)
         # SQS is slow at registering messages, so run for a few
         # iterations to ensure messages are deleted.
@@ -362,17 +368,22 @@ class Channel(virtual.Channel):
 
     @cached_property
     def wait_time_seconds(self):
-        return (self.transport_options.get('wait_time_seconds') or
-                self.default_wait_time_seconds)
+        return self.transport_options.get('wait_time_seconds',
+                                          self.default_wait_time_seconds)
 
 
 class Transport(virtual.Transport):
     Channel = Channel
 
-    polling_interval = 0
-    wait_time_seconds = 20
+    polling_interval = 1
+    wait_time_seconds = 0
     default_port = None
-    connection_errors = (StdConnectionError, exception.SQSError, socket.error)
-    channel_errors = (exception.SQSDecodeError, StdChannelError)
+    connection_errors = (
+        virtual.Transport.connection_errors +
+        (exception.SQSError, socket.error)
+    )
+    channel_errors = (
+        virtual.Transport.channel_errors + (exception.SQSDecodeError, )
+    )
     driver_type = 'sqs'
     driver_name = 'sqs'

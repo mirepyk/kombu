@@ -1,6 +1,6 @@
 """
 kombu.transport.SLMQ
-===================
+====================
 
 SoftLayer Message Queue transport.
 
@@ -12,14 +12,19 @@ import string
 
 from anyjson import loads, dumps
 
-import softlayer_messaging
 import os
 
 from kombu.five import Empty, text_t
 from kombu.utils import cached_property  # , uuid
-from kombu.utils.encoding import safe_str
+from kombu.utils.encoding import bytes_to_str, safe_str
 
 from . import virtual
+
+try:
+    from softlayer_messaging import get_client
+    from softlayer_messaging.errors import ResponseError
+except ImportError:  # pragma: no cover
+    get_client = ResponseError = None  # noqa
 
 # dots are replaced by dash, all other punctuation replaced by underscore.
 CHARS_REPLACE_TABLE = dict(
@@ -34,6 +39,10 @@ class Channel(virtual.Channel):
     _noack_queues = set()
 
     def __init__(self, *args, **kwargs):
+        if get_client is None:
+            raise ImportError(
+                'SLMQ transport requires the softlayer_messaging library',
+            )
         super(Channel, self).__init__(*args, **kwargs)
         queues = self.slmq.queues()
         for queue in queues:
@@ -64,7 +73,7 @@ class Channel(virtual.Channel):
             try:
                 self.slmq.create_queue(
                     queue, visibility_timeout=self.visibility_timeout)
-            except softlayer_messaging.errors.ResponseError:
+            except ResponseError:
                 pass
             q = self._queue_cache[queue] = self.slmq.queue(queue)
             return q
@@ -87,7 +96,7 @@ class Channel(virtual.Channel):
         rs = q.pop(1)
         if rs['items']:
             m = rs['items'][0]
-            payload = loads(m['body'])
+            payload = loads(bytes_to_str(m['body']))
             if queue in self._noack_queues:
                 q.message(m['id']).delete()
             else:
@@ -107,11 +116,11 @@ class Channel(virtual.Channel):
         super(Channel, self).basic_ack(delivery_tag)
 
     def _size(self, queue):
-        """Returns the number of messages in a queue."""
+        """Return the number of messages in a queue."""
         return self._new_queue(queue).detail()['message_count']
 
     def _purge(self, queue):
-        """Deletes all current messages in a queue."""
+        """Delete all current messages in a queue."""
         q = self._new_queue(queue)
         n = 0
         l = q.pop(10)
@@ -144,8 +153,7 @@ class Channel(virtual.Channel):
             if port:
                 endpoint = "%s:%s" % (endpoint, port)
 
-            self._slmq = softlayer_messaging.get_client(
-                account, endpoint=endpoint)
+            self._slmq = get_client(account, endpoint=endpoint)
             self._slmq.authenticate(user, api_key)
         return self._slmq
 
@@ -172,4 +180,8 @@ class Transport(virtual.Transport):
 
     polling_interval = 1
     default_port = None
-    connection_errors = (softlayer_messaging.ResponseError, socket.error)
+    connection_errors = (
+        virtual.Transport.connection_errors + (
+            ResponseError, socket.error
+        )
+    )

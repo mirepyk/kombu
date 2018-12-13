@@ -5,12 +5,11 @@ import socket
 from kombu import common
 from kombu.common import (
     Broadcast, maybe_declare,
-    send_reply, isend_reply, collect_replies,
+    send_reply, collect_replies,
     declaration_cached, ignore_errors,
     QoS, PREFETCH_COUNT_MAX,
-    entry_to_queue,
 )
-from kombu.exceptions import StdChannelError
+from kombu.exceptions import ChannelError
 
 from .case import Case, ContextMock, Mock, MockPool, patch
 
@@ -80,13 +79,15 @@ class test_maybe_declare(Case):
 
         maybe_declare(entity, channel)
         self.assertEqual(entity.declare.call_count, 1)
-        self.assertIn(entity, channel.connection.client.declared_entities)
+        self.assertIn(
+            hash(entity), channel.connection.client.declared_entities,
+        )
 
         maybe_declare(entity, channel)
         self.assertEqual(entity.declare.call_count, 1)
 
         entity.channel.connection = None
-        with self.assertRaises(StdChannelError):
+        with self.assertRaises(ChannelError):
             maybe_declare(entity)
 
     def test_binds_entities(self):
@@ -117,6 +118,7 @@ class test_replies(Case):
     def test_send_reply(self):
         req = Mock()
         req.content_type = 'application/json'
+        req.content_encoding = 'binary'
         req.properties = {'reply_to': 'hello',
                           'correlation_id': 'world'}
         channel = Mock()
@@ -134,18 +136,10 @@ class test_replies(Case):
         self.assertDictEqual(args[1], {'exchange': exchange,
                                        'routing_key': 'hello',
                                        'correlation_id': 'world',
-                                       'serializer': 'json'})
-
-        exchange.declare.assert_called_with()
-
-    @patch('kombu.common.ipublish')
-    def test_isend_reply(self, ipublish):
-        pool, exchange, req, msg, props = (Mock(), Mock(), Mock(),
-                                           Mock(), Mock())
-
-        isend_reply(pool, exchange, req, msg, props)
-        ipublish.assert_called_with(pool, send_reply,
-                                    (exchange, req, msg), props)
+                                       'serializer': 'json',
+                                       'retry': False,
+                                       'retry_policy': None,
+                                       'content_encoding': 'binary'})
 
     @patch('kombu.common.itermessages')
     def test_collect_replies_with_ack(self, itermessages):
@@ -200,14 +194,6 @@ class test_insured(Case):
 
         common.revive_connection(Mock(), channel, None)
 
-    def test_revive_producer(self):
-        on_revive = Mock()
-        channel = Mock()
-        common.revive_producer(Mock(), channel, on_revive)
-        on_revive.assert_called_with(channel)
-
-        common.revive_producer(Mock(), channel, None)
-
     def get_insured_mocks(self, insured_returns=('works', 'ignored')):
         conn = ContextMock()
         pool = MockPool(conn)
@@ -244,39 +230,6 @@ class test_insured(Case):
         common.insured(pool, fun, (2, 2), {'foo': 'bar'},
                        errback=custom_errback)
         conn.ensure_connection.assert_called_with(errback=custom_errback)
-
-    def get_ipublish_args(self, ensure_returns=None):
-        producer = ContextMock()
-        pool = MockPool(producer)
-        fun = Mock()
-        ensure_returns = ensure_returns or Mock()
-
-        producer.connection.ensure.return_value = ensure_returns
-
-        return producer, pool, fun, ensure_returns
-
-    def test_ipublish(self):
-        producer, pool, fun, ensure_returns = self.get_ipublish_args()
-        ensure_returns.return_value = 'works'
-
-        ret = common.ipublish(pool, fun, (2, 2), {'foo': 'bar'})
-        self.assertEqual(ret, 'works')
-
-        self.assertTrue(producer.connection.ensure.called)
-        e_args, e_kwargs = producer.connection.ensure.call_args
-        self.assertTupleEqual(e_args, (producer, fun))
-        self.assertTrue(e_kwargs.get('on_revive'))
-        self.assertEqual(e_kwargs.get('errback'), common._ensure_errback)
-
-        ensure_returns.assert_called_with(2, 2, foo='bar', producer=producer)
-
-    def test_ipublish_with_custom_errback(self):
-        producer, pool, fun, _ = self.get_ipublish_args()
-
-        errback = Mock()
-        common.ipublish(pool, fun, (2, 2), {'foo': 'bar'}, errback=errback)
-        _, e_kwargs = producer.connection.ensure.call_args
-        self.assertEqual(e_kwargs.get('errback'), errback)
 
 
 class MockConsumer(object):
@@ -342,14 +295,6 @@ class test_itermessages(Case):
 
         with self.assertRaises(StopIteration):
             next(it)
-
-
-class test_entry_to_queue(Case):
-
-    def test_calls_Queue_from_dict(self):
-        with patch('kombu.common.Queue') as Queue:
-            entry_to_queue('name', exchange='bar')
-            Queue.from_dict.assert_called_with('name', exchange='bar')
 
 
 class test_QoS(Case):

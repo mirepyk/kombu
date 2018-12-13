@@ -4,7 +4,7 @@ kombu.transport.zookeeper
 
 Zookeeper transport.
 
-:copyright: (c) 2010 - 2012 by Mahendra M.
+:copyright: (c) 2010 - 2013 by Mahendra M.
 :license: BSD, see LICENSE for more details.
 
 **Synopsis**
@@ -32,8 +32,8 @@ import socket
 
 from anyjson import loads, dumps
 
-from kombu.exceptions import StdConnectionError, StdChannelError
 from kombu.five import Empty
+from kombu.utils.encoding import bytes_to_str
 
 from . import virtual
 
@@ -71,6 +71,7 @@ try:
         kazoo.exceptions.NotEmptyException,
         kazoo.exceptions.SessionExpiredException,
         kazoo.exceptions.InvalidCallbackException,
+        socket.error,
     )
 except ImportError:
     kazoo = None                                    # noqa
@@ -117,7 +118,7 @@ class Channel(virtual.Channel):
         if msg is None:
             raise Empty()
 
-        return loads(msg)
+        return loads(bytes_to_str(msg))
 
     def _purge(self, queue):
         count = 0
@@ -168,8 +169,12 @@ class Transport(virtual.Transport):
     Channel = Channel
     polling_interval = 1
     default_port = DEFAULT_PORT
-    connection_errors = (StdConnectionError, ) + KZ_CONNECTION_ERRORS
-    channel_errors = (StdChannelError, socket.error) + KZ_CHANNEL_ERRORS
+    connection_errors = (
+        virtual.Transport.connection_errors + KZ_CONNECTION_ERRORS
+    )
+    channel_errors = (
+        virtual.Transport.channel_errors + KZ_CHANNEL_ERRORS
+    )
     driver_type = 'zookeeper'
     driver_name = 'kazoo'
 

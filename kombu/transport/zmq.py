@@ -17,7 +17,6 @@ try:
 except ImportError:
     zmq = ZMQError = None  # noqa
 
-from kombu.exceptions import StdConnectionError, StdChannelError
 from kombu.five import Empty
 from kombu.log import get_logger
 from kombu.serialization import pickle
@@ -72,16 +71,16 @@ class MultiChannelPoller(object):
         for channel in self._channels:
             self._register(channel)
 
-    def handle_event(self, fileno, event):
+    def on_readable(self, fileno):
         chan = self._fd_to_chan[fileno]
-        return (chan.drain_events(), chan)
+        return chan.drain_events(), chan
 
     def get(self, timeout=None):
         self.on_poll_start()
 
         events = self.poller.poll(timeout)
-        for fileno, event in events or []:
-            return self.handle_event(fileno, event)
+        for fileno, _ in events or []:
+            return self.on_readable(fileno)
 
         raise Empty()
 
@@ -136,8 +135,16 @@ class Client(object):
         self.vent.connect(endpoint)
 
     def get(self, queue=None, timeout=None):
+        sink = self.sink
         try:
-            return self.sink.recv(flags=zmq.NOBLOCK)
+            if timeout is not None:
+                prev_timeout, sink.RCVTIMEO = sink.RCVTIMEO, timeout
+                try:
+                    return sink.recv()
+                finally:
+                    sink.RCVTIMEO = prev_timeout
+            else:
+                return sink.recv()
         except ZMQError as exc:
             if exc.errno == zmq.EAGAIN:
                 raise socket.error(errno.EAGAIN, exc.strerror)
@@ -231,16 +238,15 @@ class Channel(virtual.Channel):
 class Transport(virtual.Transport):
     Channel = Channel
 
+    can_parse_url = True
     default_port = DEFAULT_PORT
     driver_type = 'zeromq'
     driver_name = 'zmq'
 
-    connection_errors = (StdConnectionError, ZMQError,)
-    channel_errors = (StdChannelError, )
+    connection_errors = virtual.Transport.connection_errors + (ZMQError, )
 
     supports_ev = True
     polling_interval = None
-    nb_keep_draining = True
 
     def __init__(self, *args, **kwargs):
         if zmq is None:
@@ -251,17 +257,22 @@ class Transport(virtual.Transport):
     def driver_version(self):
         return zmq.__version__
 
-    def on_poll_init(self, poller):
-        self.cycle.poller = poller
-
-    def on_poll_start(self):
+    def register_with_event_loop(self, connection, loop):
         cycle = self.cycle
-        cycle.on_poll_start()
-        return dict((fd, self.handle_event) for fd in cycle.fds)
+        cycle.poller = loop.poller
+        add_reader = loop.add_reader
+        on_readable = self.on_readable
 
-    def handle_event(self, fileno, event):
-        evt = self.cycle.handle_event(fileno, event)
-        self._handle_event(evt)
+        cycle_poll_start = cycle.on_poll_start
+
+        def on_poll_start():
+            cycle_poll_start()
+            [add_reader(fd, on_readable, fd) for fd in cycle.fds]
+
+        loop.on_tick.add(on_poll_start)
+
+    def on_readable(self, fileno):
+        self._handle_event(self.cycle.on_readable(fileno))
 
     def drain_events(self, connection, timeout=None):
         more_to_read = False

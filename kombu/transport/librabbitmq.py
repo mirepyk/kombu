@@ -22,7 +22,6 @@ except ImportError:  # pragma: no cover
     except ImportError:
         raise ImportError('No module named librabbitmq')
 
-from kombu.exceptions import StdConnectionError, StdChannelError
 from kombu.five import items, values
 from kombu.utils.amq_manager import get_manager
 
@@ -73,21 +72,22 @@ class Transport(base.Transport):
     Connection = Connection
 
     default_port = DEFAULT_PORT
-    connection_errors = (StdConnectionError,
-                         ConnectionError,
-                         socket.error,
-                         IOError,
-                         OSError)
-    channel_errors = (StdChannelError, ChannelError, )
+    connection_errors = (
+        base.Transport.connection_errors + (
+            ConnectionError, socket.error, IOError, OSError)
+    )
+    channel_errors = (
+        base.Transport.channel_errors + (ChannelError, )
+    )
     driver_type = 'amqp'
     driver_name = 'librabbitmq'
 
     supports_ev = True
-    nb_keep_draining = True
 
     def __init__(self, client, **kwargs):
         self.client = client
         self.default_port = kwargs.get('default_port') or self.default_port
+        self.__reader = None
 
     def driver_version(self):
         return amqp.__version__
@@ -142,14 +142,10 @@ class Transport(base.Transport):
     def verify_connection(self, connection):
         return connection.connected
 
-    def on_poll_init(self, poller):
-        pass
-
-    def on_poll_start(self):
-        return {}
-
-    def eventmap(self, connection):
-        return {connection.fileno(): self.client.drain_nowait}
+    def register_with_event_loop(self, connection, loop):
+        loop.add_reader(
+            connection.fileno(), self.on_readable, connection, loop,
+        )
 
     def get_manager(self, *args, **kwargs):
         return get_manager(self.client, *args, **kwargs)

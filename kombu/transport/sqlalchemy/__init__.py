@@ -11,8 +11,8 @@ from sqlalchemy.orm import sessionmaker
 
 from kombu.five import Empty
 from kombu.transport import virtual
-from kombu.exceptions import StdConnectionError, StdChannelError
 from kombu.utils import cached_property
+from kombu.utils.encoding import bytes_to_str
 
 from .models import (ModelBase, Queue as QueueBase, Message as MessageBase,
                      class_registry, metadata)
@@ -103,7 +103,7 @@ class Channel(virtual.Channel):
                 .first()
             if msg:
                 msg.visible = False
-                return loads(msg.payload)
+                return loads(bytes_to_str(msg.payload))
             raise Empty()
         finally:
             self.session.commit()
@@ -149,9 +149,8 @@ class Channel(virtual.Channel):
 class Transport(virtual.Transport):
     Channel = Channel
 
+    can_parse_url = True
     default_port = 0
-    connection_errors = (StdConnectionError, )
-    channel_errors = (StdChannelError, )
     driver_type = 'sql'
     driver_name = 'sqlalchemy'
 

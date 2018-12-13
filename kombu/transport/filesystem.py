@@ -11,13 +11,12 @@ from anyjson import loads, dumps
 
 import os
 import shutil
-import time
 import uuid
 import tempfile
 
 from . import virtual
-from kombu.exceptions import StdConnectionError, StdChannelError
-from kombu.five import Empty
+from kombu.exceptions import ChannelError
+from kombu.five import Empty, monotonic
 from kombu.utils import cached_property
 from kombu.utils.encoding import bytes_to_str, str_to_bytes
 
@@ -65,7 +64,7 @@ class Channel(virtual.Channel):
     def _put(self, queue, payload, **kwargs):
         """Put `message` onto `queue`."""
 
-        filename = '%s_%s.%s.msg' % (int(round(time.time() * 1000)),
+        filename = '%s_%s.%s.msg' % (int(round(monotonic() * 1000)),
                                      uuid.uuid4(), queue)
         filename = os.path.join(self.data_folder_out, filename)
 
@@ -74,7 +73,7 @@ class Channel(virtual.Channel):
             lock(f, LOCK_EX)
             f.write(str_to_bytes(dumps(payload)))
         except (IOError, OSError):
-            raise StdChannelError(
+            raise ChannelError(
                 'Cannot add file {0!r} to directory'.format(filename))
         finally:
             unlock(f)
@@ -113,7 +112,7 @@ class Channel(virtual.Channel):
                 if not self.store_processed:
                     os.remove(filename)
             except (IOError, OSError):
-                raise StdChannelError(
+                raise ChannelError(
                     'Cannot read file {0!r} from queue.'.format(filename))
 
             return loads(bytes_to_str(payload))
@@ -187,9 +186,6 @@ class Transport(virtual.Transport):
     Channel = Channel
 
     default_port = 0
-    connection_errors = (StdConnectionError, )
-    channel_errors = (StdChannelError, )
-
     driver_type = 'filesystem'
     driver_name = 'filesystem'
 

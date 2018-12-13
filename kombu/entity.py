@@ -288,7 +288,7 @@ class Exchange(MaybeChannelBound):
 
     @property
     def can_cache_declaration(self):
-        return self.durable
+        return self.durable and not self.auto_delete
 
 
 class binding(object):
@@ -553,7 +553,7 @@ class Queue(MaybeChannelBound):
     def get(self, no_ack=None, accept=None):
         """Poll the server for a new message.
 
-        Returns the message instance if a message was available,
+        Must return the message if a message was available,
         or :const:`None` otherwise.
 
         :keyword no_ack: If enabled the broker will automatically
@@ -670,7 +670,7 @@ class Queue(MaybeChannelBound):
 
     @property
     def can_cache_declaration(self):
-        return self.durable
+        return self.durable and not self.auto_delete
 
     @classmethod
     def from_dict(self, queue, **options):

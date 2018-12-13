@@ -33,12 +33,6 @@ def get_logger(logger):
     return logger
 
 
-def anon_logger(name):
-    logger = logging.getLogger(name)
-    logger.addHandler(NullHandler())
-    return logger
-
-
 def get_loglevel(level):
     if isinstance(level, string_t):
         return LOG_LEVELS[level]

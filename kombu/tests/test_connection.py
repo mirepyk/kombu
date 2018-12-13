@@ -1,6 +1,5 @@
 from __future__ import absolute_import
 
-import errno
 import pickle
 import socket
 
@@ -211,9 +210,10 @@ class test_Connection(Case):
         self.assertIsNone(connection._transport)
 
     def test_uri_passthrough(self):
-        from kombu import connection as mod
-        prev, mod.URI_PASSTHROUGH = mod.URI_PASSTHROUGH, set(['foo'])
-        try:
+        transport = Mock(name='transport')
+        with patch('kombu.connection.get_transport_cls') as gtc:
+            gtc.return_value = transport
+            transport.can_parse_url = True
             with patch('kombu.connection.parse_url') as parse_url:
                 c = Connection('foo+mysql://some_host')
                 self.assertEqual(c.transport_cls, 'foo')
@@ -225,8 +225,6 @@ class test_Connection(Case):
                 self.assertEqual(c.transport_cls, 'foo')
                 self.assertFalse(parse_url.called)
                 self.assertEqual(c.hostname, 'mysql://some_host')
-        finally:
-            mod.URI_PASSTHROUGH = prev
         c = Connection('pyamqp+sqlite://some_host')
         self.assertTrue(c.as_uri().startswith('pyamqp+'))
 
@@ -261,32 +259,6 @@ class test_Connection(Case):
             self.assertEqual(cb(KeyError(), intervals, 0), 0)
             self.assertTrue(errback.called)
 
-    def test_drain_nowait(self):
-        c = Connection(transport=Mock)
-        c.drain_events = Mock()
-        c.drain_events.side_effect = socket.timeout()
-
-        c.more_to_read = True
-        self.assertFalse(c.drain_nowait())
-        self.assertFalse(c.more_to_read)
-
-        c.drain_events.side_effect = socket.error()
-        c.drain_events.side_effect.errno = errno.EAGAIN
-        c.more_to_read = True
-        self.assertFalse(c.drain_nowait())
-        self.assertFalse(c.more_to_read)
-
-        c.drain_events.side_effect = socket.error()
-        c.drain_events.side_effect.errno = errno.EPERM
-        with self.assertRaises(socket.error):
-            c.drain_nowait()
-
-        c.more_to_read = False
-        c.drain_events = Mock()
-        self.assertTrue(c.drain_nowait())
-        c.drain_events.assert_called_with(timeout=0)
-        self.assertTrue(c.more_to_read)
-
     def test_supports_heartbeats(self):
         c = Connection(transport=Mock)
         c.transport.supports_heartbeats = False
@@ -297,11 +269,13 @@ class test_Connection(Case):
         c.transport.supports_ev = False
         self.assertFalse(c.is_evented)
 
-    def test_eventmap(self):
+    def test_register_with_event_loop(self):
         c = Connection(transport=Mock)
-        c.transport.eventmap.return_value = {1: 1, 2: 2}
-        self.assertDictEqual(c.eventmap, {1: 1, 2: 2})
-        c.transport.eventmap.assert_called_with(c.connection)
+        loop = Mock(name='loop')
+        c.register_with_event_loop(loop)
+        c.transport.register_with_event_loop.assert_called_with(
+            c.connection, loop,
+        )
 
     def test_manager(self):
         c = Connection(transport=Mock)

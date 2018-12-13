@@ -4,7 +4,7 @@ kombu.transport.beanstalk
 
 Beanstalk transport.
 
-:copyright: (c) 2010 - 2012 by David Ziegler.
+:copyright: (c) 2010 - 2013 by David Ziegler.
 :license: BSD, see LICENSE for more details.
 
 """
@@ -15,8 +15,8 @@ import socket
 
 from anyjson import loads, dumps
 
-from kombu.exceptions import StdConnectionError, StdChannelError
 from kombu.five import Empty
+from kombu.utils.encoding import bytes_to_str
 
 from . import virtual
 
@@ -32,7 +32,7 @@ class Channel(virtual.Channel):
         item, dest = None, None
         if job:
             try:
-                item = loads(job.body)
+                item = loads(bytes_to_str(job.body))
                 dest = job.stats()['tube']
             except Exception:
                 job.bury()
@@ -125,15 +125,16 @@ class Transport(virtual.Transport):
 
     polling_interval = 1
     default_port = DEFAULT_PORT
-    connection_errors = (StdConnectionError,
-                         socket.error,
-                         beanstalkc.SocketError,
-                         IOError)
-    channel_errors = (StdChannelError,
-                      socket.error,
-                      IOError,
-                      beanstalkc.SocketError,
-                      beanstalkc.BeanstalkcException)
+    connection_errors = (
+        virtual.Transport.connection_errors + (
+            socket.error, beanstalkc.SocketError, IOError)
+    )
+    channel_errors = (
+        virtual.Transport.channel_errors + (
+            socket.error, IOError,
+            beanstalkc.SocketError,
+            beanstalkc.BeanstalkcException)
+    )
     driver_type = 'beanstalk'
     driver_name = 'beanstalkc'
 

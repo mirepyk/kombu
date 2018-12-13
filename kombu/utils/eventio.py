@@ -45,6 +45,7 @@ except ImportError:
 
 from kombu.syn import detect_environment
 
+from . import fileno
 from .compat import get_errno
 
 __all__ = ['poll']
@@ -186,9 +187,9 @@ class _select(Poller):
                      self._efd) = set(), set(), set()
 
     def register(self, fd, events):
+        fd = fileno(fd)
         if events & ERR:
             self._efd.add(fd)
-            self._rfd.add(fd)
         if events & WRITE:
             self._wfd.add(fd)
         if events & READ:
@@ -203,6 +204,7 @@ class _select(Poller):
                     self.unregister(fd)
 
     def unregister(self, fd):
+        fd = fileno(fd)
         self._rfd.discard(fd)
         self._wfd.discard(fd)
         self._efd.discard(fd)
@@ -235,7 +237,9 @@ class _select(Poller):
         return list(events.items())
 
     def close(self):
-        pass
+        self._rfd.clear()
+        self._wfd.clear()
+        self._efd.clear()
 
 
 def _get_poller():

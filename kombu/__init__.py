@@ -1,7 +1,7 @@
-"""Messaging Framework for Python"""
+"""Messaging library for Python"""
 from __future__ import absolute_import
 
-VERSION = (3, 0, 0, 'rc1')
+VERSION = (3, 0, 5)
 __version__ = '.'.join(map(str, VERSION[0:3])) + ''.join(VERSION[3:])
 __author__ = 'Ask Solem'
 __contact__ = 'ask@celeryproject.org'
@@ -13,13 +13,8 @@ __docformat__ = 'restructuredtext en'
 import os
 import sys
 
-if sys.version_info < (2, 5):  # pragma: no cover
-    if sys.version_info >= (2, 5):
-        raise Exception(
-            'Python 2.5 is not supported by this version. '
-            'Please use Kombu versions 2.x.')
-    else:
-        raise Exception('Kombu requires Python versions 2.6 or later.')
+if sys.version_info < (2, 6):  # pragma: no cover
+    raise Exception('Kombu 3.1 requires Python versions 2.6 or later.')
 
 STATICA_HACK = True
 globals()['kcah_acitats'[::-1].upper()] = False
